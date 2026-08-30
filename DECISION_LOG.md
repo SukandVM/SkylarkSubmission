@@ -74,6 +74,55 @@ A future enhancement could be a "Generate Leadership Report" button that compile
 
 ---
 
+## Data Preprocessing Steps
+
+### Raw Data Issues Found
+
+#### Work Orders (176 rows × 38 columns)
+
+| Issue | Severity | Detail | Resolution |
+|---|---|---|---|
+| Extra blank header row | High | Row 0 is all NaN; pandas reads it as column headers creating `Unnamed: 0`, `Unnamed: 1`, etc. | Exported with `header=1` to skip blank row |
+| 100% null columns (4) | High | `Expected Billing Month`, `Actual Collection Month`, `Collection Status`, `Collection Date` — all 176 rows null | Dropped from DataFrame after loading |
+| Billing Status typo | Medium | `"BIlled"` (capital I) is a valid status label in the Monday.com board | Normalized to `"Billed"` in `data_processor.py` via `BILLING_STATUS_CANONICAL` mapping |
+| Mixed quantity format | Low | `Quantity by Ops` contains `"5360 HA"` (unit suffix) alongside pure numbers like `"4"` | Parsed with regex to extract numeric value: `"5360 HA"` → `5360.0` |
+| 84% null Billing Status | Medium | Only 28/176 rows have a billing status value | Agent flags this in data quality notes |
+| 94% null AR Priority | Medium | Almost entirely empty | Agent flags this in data quality notes |
+
+#### Deals (346 rows × 12 columns)
+
+| Issue | Severity | Detail | Resolution |
+|---|---|---|---|
+| Header-as-data rows | High | `"Close Date (A)"`, `"Deal Stage"`, `"Sector/service"`, `"Product deal"`, `"Closure Probability"`, `"Deal Status"` appear as data values in their respective columns | Filtered out: `df = df[df[col] != col]` for each affected column |
+| 92% null Close Date | High | Only 26 real dates out of 346 rows | Agent notes this; Tentative Close Date used as fallback |
+| 75% null Closure Probability | High | 258/346 rows missing | Agent flags in every response |
+| 52% null Deal Value | High | 181/346 rows missing | Agent flags; `top_deals` filters to non-null values |
+| 49% null Product deal | Medium | 170/346 rows missing | Not used in BI computations |
+| 52 duplicate rows | Medium | Same (Deal Name, Client Code, Deal Status) — some are legitimately different stages, some are true duplicates | Deduplicated by (Deal Name, Client Code), keeping row with most non-null values |
+| Monday.com status label | Low | Board has `"BIlled"` as a valid status label (typo baked into board config) | Cannot change via API; `data_processor.py` normalizes when reading CSV |
+
+### Preprocessing Applied
+
+1. **CSV Export Fix**: Work Orders exported with `header=1` to skip blank row 0
+2. **Header Artifact Removal**: Deals CSV filtered to remove rows where column value equals its own header text
+3. **Null Column Drop**: 4 all-null columns removed from Work Orders (`expected_billing_month`, `actual_collection_month`, `collection_status`, `collection_date`)
+4. **Typo Normalization**: `"BIlled"` → `"Billed"` via `BILLING_STATUS_CANONICAL` mapping in data processor
+5. **Quantity Parsing**: Non-numeric suffixes stripped from `quantity_by_ops` (e.g., `"5360 HA"` → `5360.0`)
+6. **Deal Deduplication**: Deals deduplicated by (Deal Name, Client Code) keeping the row with most non-null values
+7. **Monday.com Cleanup Script**: `scripts/cleanup_monday.py` — discovers boards, fetches all items, identifies and deletes header-artifact items, attempts to fix typos
+8. **Data Quality Report Upgrade**: Threshold lowered from >80% to >=70% for "data gap" warnings; added "critical" (>=90%) and "partial" (>=50%) severity levels
+
+### How Agent Communicates Data Quality
+
+Every response from the AI agent includes a `data_quality_notes` array with messages like:
+- "Work Orders data has ~34% overall missing values"
+- "Deal values are missing for ~52% of deals"
+- "Closure probability is missing for ~75% of deals"
+
+The Streamlit **Data Quality** dashboard shows per-column null rates with color-coded severity. The agent also proactively mentions data gaps when relevant to the query (e.g., "Note: 3 deals have missing close dates, estimates used").
+
+---
+
 ## What I'd Do Differently With More Time
 
 1. **Monday.com live sync** — Periodic background sync from Monday.com boards to keep data fresh

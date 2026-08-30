@@ -41,6 +41,15 @@ STATUS_CANONICAL = {
     "pending": "Pending",
 }
 
+BILLING_STATUS_CANONICAL = {
+    "billed": "Billed",
+    "billed": "Billed",
+    "partially billed": "Partially Billed",
+    "not billable": "Not Billable",
+    "update required": "Pending",
+    "stuck": "Paused",
+}
+
 DEAL_STAGE_CANONICAL = {
     "a. lead generated": "Lead Generated",
     "b. sales qualified leads": "Sales Qualified",
@@ -59,6 +68,13 @@ DEAL_STAGE_CANONICAL = {
     "o. not relevant at all": "Not Relevant",
     "project completed": "Completed",
 }
+
+COLUMNS_TO_DROP_WO = [
+    "expected_billing_month",
+    "actual_collection_month",
+    "collection_status",
+    "collection_date",
+]
 
 
 class DataProcessor:
@@ -129,10 +145,18 @@ class DataProcessor:
         }
         df.rename(columns=rename_map, inplace=True)
 
+        cols_to_drop = [c for c in COLUMNS_TO_DROP_WO if c in df.columns]
+        df.drop(columns=cols_to_drop, inplace=True)
+        logger.info("Dropped %d 100%%-null columns from work orders: %s", len(cols_to_drop), cols_to_drop)
+
         df["sector"] = df["sector"].apply(lambda x: self._normalize_sector(x) if pd.notna(x) else x)
         df["execution_status"] = df["execution_status"].apply(
             lambda x: self._normalize_status(x) if pd.notna(x) else x
         )
+        if "billing_status" in df.columns:
+            df["billing_status"] = df["billing_status"].apply(
+                lambda x: self._normalize_billing_status(x) if pd.notna(x) else x
+            )
 
         for col in ["amount_excl_gst", "amount_incl_gst", "billed_value_excl_gst",
                       "billed_value_incl_gst", "collected_amount", "amount_to_be_billed_excl",
@@ -145,10 +169,22 @@ class DataProcessor:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
 
+        if "quantity_by_ops" in df.columns:
+            df["quantity_by_ops"] = df["quantity_by_ops"].apply(self._parse_quantity)
+
         df.dropna(subset=["deal_name"], inplace=True)
 
     def _clean_deals(self):
         df = self.deals
+
+        header_values = ["Deal Name", "Deal Status", "Deal Stage", "Close Date (A)",
+                         "Closure Probability", "Sector/service", "Product deal",
+                         "Owner code", "Client Code", "Masked Deal value",
+                         "Tentative Close Date", "Created Date"]
+        for col in df.columns:
+            if col in df.columns:
+                df = df[df[col].astype(str) != col]
+
         df["sector_clean"] = df["Sector/service"].apply(
             lambda x: self._normalize_sector(x) if pd.notna(x) else x
         )
@@ -165,6 +201,13 @@ class DataProcessor:
         df = df[df["Deal Name"] != "Deal Name"]
         df = df[df["Deal Status"] != "Deal Status"]
         df = df[df["Deal Stage"] != "Deal Stage"]
+
+        df["_completeness"] = df.notna().sum(axis=1)
+        df = df.sort_values("_completeness", ascending=False).drop_duplicates(
+            subset=["Deal Name", "Client Code"], keep="first"
+        )
+        df.drop(columns=["_completeness"], inplace=True)
+
         self.deals = df
 
     @staticmethod
@@ -180,6 +223,13 @@ class DataProcessor:
             return str(value)
         cleaned = value.strip().lower()
         return STATUS_CANONICAL.get(cleaned, value.strip())
+
+    @staticmethod
+    def _normalize_billing_status(value: str) -> str:
+        if not isinstance(value, str):
+            return str(value)
+        cleaned = value.strip().lower()
+        return BILLING_STATUS_CANONICAL.get(cleaned, value.strip())
 
     @staticmethod
     def _normalize_deal_stage(value: str) -> str:
@@ -202,6 +252,19 @@ class DataProcessor:
         except ValueError:
             return None
 
+    @staticmethod
+    def _parse_quantity(value) -> Optional[float]:
+        if pd.isna(value) or value == "" or value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        s = str(value).strip()
+        s = re.sub(r"[^0-9.\-]", "", s)
+        try:
+            return float(s) if s else None
+        except ValueError:
+            return None
+
     def get_work_orders(self) -> pd.DataFrame:
         return self.work_orders.copy() if self.work_orders is not None else pd.DataFrame()
 
@@ -218,8 +281,12 @@ class DataProcessor:
             null_count = int(df[col].isnull().sum())
             pct = round(null_count / total * 100, 1)
             null_summary[col] = {"null_count": null_count, "null_pct": pct}
-            if pct > 80:
-                issues.append(f"Column '{col}' has {pct}% missing values")
+            if pct >= 90:
+                issues.append(f"Column '{col}' has {pct}% missing values (critical)")
+            elif pct >= 70:
+                issues.append(f"Column '{col}' has {pct}% missing values (data gap)")
+            elif pct >= 50:
+                issues.append(f"Column '{col}' has {pct}% missing values (partial)")
         return {
             "board": board_name,
             "total_rows": total,
