@@ -8,7 +8,6 @@ services:
         sync: false
       - key: MONDAY_API_KEY
         sync: false
-      - key: AI_MODEL
-        value: gemini-2.5-flash
-    healthCheckPath: /api/health
+      - key: PYTHON_VERSION
+        value: "3.11"
     autoDeploy: true
