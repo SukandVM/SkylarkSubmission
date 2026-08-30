@@ -18,9 +18,6 @@
 - **Assumption**: The real-world messy data has specific patterns: inconsistent sector names, missing financial values, duplicate header rows in the source Excel, and varied date formats.
 - **Rationale**: Built a dedicated `DataProcessor` class that normalizes sectors via a canonical mapping, parses currencies with regex, and handles null values gracefully. Every response includes data quality notes.
 
-### 5. Architecture Mirroring Spritle OneAI
-- **Assumption**: Following the Spritle OneAI Tool's structure (FastAPI routers, services layer, schemas) makes the codebase familiar and maintainable.
-- **Rationale**: The assignment evaluates engineering quality. A clean, modular architecture demonstrates production thinking.
 
 ---
 
