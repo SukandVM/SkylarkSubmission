@@ -1,13 +1,11 @@
 services:
   - type: web
     name: skylark-bi-agent
-    runtime: docker
-    dockerfilePath: Dockerfile
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true
     envVars:
       - key: GEMINI_API_KEY
         sync: false
       - key: MONDAY_API_KEY
         sync: false
-      - key: PYTHON_VERSION
-        value: "3.11"
-    autoDeploy: true
